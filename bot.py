@@ -450,11 +450,11 @@ class SetupGroup(app_commands.Group):
     async def defaults(
         self,
         interaction: discord.Interaction,
-        nickname_source: app_commands.Choice[str],
+        nickname_source: str,
         auto_create_game_roles: bool = True,
         remove_unverified_on_verify: bool = True,
     ):
-        Database.update_guild_setting(interaction.guild.id, "default_nickname_source", nickname_source.value)
+        Database.update_guild_setting(interaction.guild.id, "default_nickname_source", nickname_source)
         Database.update_guild_setting(interaction.guild.id, "auto_create_game_roles", 1 if auto_create_game_roles else 0)
         Database.update_guild_setting(interaction.guild.id, "remove_unverified_on_verify", 1 if remove_unverified_on_verify else 0)
         await interaction.response.send_message("Default settings updated.", ephemeral=True)
@@ -486,10 +486,10 @@ class ConnectGroup(app_commands.Group):
         )
 
     @app_commands.command(name="league", description="Connect a League of Legends Riot ID")
-    async def league(self, interaction: discord.Interaction, game_name: str, tag_line: str, routing: app_commands.Choice[str]):
+    async def league(self, interaction: discord.Interaction, game_name: str, tag_line: str, routing: str):
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with aiohttp.ClientSession() as session:
-            riot_profile = await ExternalAPI.riot_account(session, game_name, tag_line, routing.value)
+            riot_profile = await ExternalAPI.riot_account(session, game_name, tag_line, routing)
         riot_profile.game = "league"
         Database.save_game_connection(interaction.guild.id, interaction.user.id, riot_profile)
         notes = await refresh_member_roles_and_nickname(interaction.user)
@@ -499,10 +499,10 @@ class ConnectGroup(app_commands.Group):
         )
 
     @app_commands.command(name="valorant", description="Connect a VALORANT Riot ID")
-    async def valorant(self, interaction: discord.Interaction, game_name: str, tag_line: str, routing: app_commands.Choice[str]):
+    async def valorant(self, interaction: discord.Interaction, game_name: str, tag_line: str, routing: str):
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with aiohttp.ClientSession() as session:
-            riot_profile = await ExternalAPI.riot_account(session, game_name, tag_line, routing.value)
+            riot_profile = await ExternalAPI.riot_account(session, game_name, tag_line, routing)
         riot_profile.game = "valorant"
         Database.save_game_connection(interaction.guild.id, interaction.user.id, riot_profile)
         notes = await refresh_member_roles_and_nickname(interaction.user)
@@ -613,13 +613,13 @@ async def update(interaction: discord.Interaction):
 
 @bot.tree.command(name="nickname_source", description="Choose what account the bot should use for your nickname")
 @app_commands.describe(source="Only saved account sources can be used")
-async def nickname_source(interaction: discord.Interaction, source: app_commands.Choice[str]):
-    if source.value != "discord":
-        row = Database.get_game_connection(interaction.guild.id, interaction.user.id, source.value)
+async def nickname_source(interaction: discord.Interaction, source: str):
+    if source != "discord":
+        row = Database.get_game_connection(interaction.guild.id, interaction.user.id, source)
         if not row:
-            await interaction.response.send_message(f"You have not connected **{source.value}** yet.", ephemeral=True)
+            await interaction.response.send_message(f"You have not connected **{source}** yet.", ephemeral=True)
             return
-    Database.set_nickname_source(interaction.guild.id, interaction.user.id, source.value)
+    Database.set_nickname_source(interaction.guild.id, interaction.user.id, source)
     await interaction.response.defer(ephemeral=True, thinking=True)
     notes = await refresh_member_roles_and_nickname(interaction.user)
     await interaction.followup.send("Nickname source saved.\n" + ("\n".join(notes) if notes else "Done."), ephemeral=True)
@@ -644,9 +644,9 @@ async def connections(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="disconnect", description="Remove a saved game connection")
-async def disconnect(interaction: discord.Interaction, game: app_commands.Choice[str]):
-    Database.delete_game_connection(interaction.guild.id, interaction.user.id, game.value)
-    await interaction.response.send_message(f"Removed saved connection for **{game.value}**.", ephemeral=True)
+async def disconnect(interaction: discord.Interaction, game: str):
+    Database.delete_game_connection(interaction.guild.id, interaction.user.id, game)
+    await interaction.response.send_message(f"Removed saved connection for **{game}**.", ephemeral=True)
 
 
 @disconnect.autocomplete("game")
