@@ -1,136 +1,74 @@
-# Discord Game Verification Bot
+# Vaultcord Manual Review Verification Bot
 
-A Discord bot starter for account verification and game connectors, built for Railway.
+Simple Discord verification bot for this flow:
 
-## What this bot does
+1. User clicks the website verify button.
+2. User finishes website verification outside Discord.
+3. User clicks `Done / Skip Roblox`.
+4. Bot sends the request to a mod logs channel.
+5. Staff clicks `Approve` or `Decline / Kick`.
+6. Approve gives the verified role and removes unverified.
+7. Decline kicks the member.
 
-- Global slash commands for all servers
-- `/verify` to verify a Discord account per server
-- `/setup channel` to set the verification channel
-- `/setup roles` to set unverified and verified roles
-- `/setup defaults` to set nickname source and role behavior without editing code
-- `/setup_panel` to post a verification guide panel
-- Auto role for new members
-- Auto role for verified members
-- Optional nickname change based on a saved game account
-- Account connectors for:
-  - Roblox
-  - League of Legends
-  - VALORANT
-  - Mobile Legends
-  - Call of Duty
-- Roblox community role binding:
-  - `/roblox community_connect`
-  - `/roblox community_roles_bind`
-- `/update` to refresh roles and nickname
-- `/connections` to see saved accounts
-- `/disconnect` to remove a saved account
+## Features
 
-## Important notes
+- Auto unverified role on member join
+- Mod review buttons in logs channel
+- Approve = verified role
+- Decline = kick
+- Custom verify URL
+- Custom panel title, description, and button labels
+- Per-server settings stored in SQLite
+- No Roblox connector inside this bot
 
-- Roblox connection is real and resolves a username to a Roblox user ID.
-- League and VALORANT connection use Riot's official account API and require `RIOT_API_KEY`.
-- Mobile Legends and Call of Duty are saved as manual connectors in this starter. That keeps the bot usable even when official public account lookup options are limited or unstable.
-- Per-server settings are stored in the bot database, so you do not need to keep editing GitHub for channel IDs or role IDs.
+## Railway Variables
 
-## Railway variables
+Use these in Railway:
 
-Set these in Railway:
+- `DISCORD_TOKEN`
+- `DATABASE_PATH` (optional, default `bot.db`)
+- `DEFAULT_VERIFY_URL` (optional)
+- `DEFAULT_PANEL_TITLE` (optional)
+- `DEFAULT_PANEL_DESCRIPTION` (optional)
+- `DEFAULT_WEBSITE_BUTTON` (optional)
+- `DEFAULT_DONE_BUTTON` (optional)
+- `DEFAULT_UNVERIFIED_ROLE_NAME` (optional)
+- `DEFAULT_VERIFIED_ROLE_NAME` (optional)
 
-- `DISCORD_TOKEN` = your bot token
-- `RIOT_API_KEY` = optional, for League and VALORANT
-- `DATABASE_PATH` = optional, default is `verification_bot.db`
-- `DEFAULT_UNVERIFIED_ROLE_NAME` = optional, default `Unverified`
-- `DEFAULT_VERIFIED_ROLE_NAME` = optional, default `Verified`
-- `DEFAULT_VERIFICATION_CHANNEL_NAME` = optional, default `verify`
-- `DEFAULT_NICKNAME_SOURCE` = optional, default `discord`
-- `GAME_ROLE_PREFIX` = optional, default `Game`
-- `AUTO_CREATE_GAME_ROLES` = `true` or `false`
-- `SYNC_ON_STARTUP` = `true` or `false`
+## Required Bot Permissions
 
-## Railway deploy
+Give the bot these permissions:
 
-1. Create a Discord application and bot in the Discord Developer Portal.
-2. Enable these bot intents:
-   - Server Members Intent
-3. Invite the bot with these scopes:
-   - `bot`
-   - `applications.commands`
-4. Permissions needed:
-   - Manage Roles
-   - Manage Nicknames
-   - Send Messages
-   - View Channels
-   - Read Message History
-5. Push this project to GitHub.
-6. In Railway, create a new service from your GitHub repo.
-7. Add the variables listed above.
-8. Start command:
-   - `python bot.py`
+- Manage Roles
+- Kick Members
+- Send Messages
+- View Channels
+- Read Message History
 
-## Commands
+Also enable **Server Members Intent** in the Discord Developer Portal.
 
-### Main
+## Slash Commands
 
-- `/verify`
-- `/update`
-- `/connections`
-- `/disconnect`
-- `/nickname_source`
-- `/setup_panel`
+- `/roles` → set unverified and verified roles
+- `/set_logs` → set staff logs channel
+- `/set_verify_channel` → set panel channel
+- `/set_verify_url` → set your verify website URL
+- `/set_message` → change panel title, description, button labels
+- `/setup_panel` → send the verify panel
+- `/config` → show current config
 
-### Setup
+## Recommended Setup Order
 
-- `/setup channel`
-- `/setup roles`
-- `/setup defaults`
+1. Invite the bot
+2. Run `/roles`
+3. Run `/set_logs`
+4. Run `/set_verify_channel`
+5. Run `/set_verify_url`
+6. Run `/set_message`
+7. Run `/setup_panel`
 
-### Connectors
+## Start Command
 
-- `/connect roblox username:<name>`
-- `/connect league game_name:<name> tag_line:<tag> routing:<americas|asia|europe>`
-- `/connect valorant game_name:<name> tag_line:<tag> routing:<americas|asia|europe>`
-- `/connect mobile_legends player_id:<id> ign:<ign> server_id:<optional>`
-- `/connect cod username:<name> platform:<platform>`
-
-### Roblox helpers
-
-- `/roblox community_connect`
-- `/roblox community_roles_bind group_id:<id> min_rank:<rank> role:<role>`
-
-## Clean role idea
-
-This starter uses clean roles like:
-
-- `Roblox | Connected`
-- `LEAGUE | Connected`
-- `VALORANT | Connected`
-- `MOBILE_LEGENDS | Connected`
-- `COD | Connected`
-
-That is cleaner than creating one public role per exact player ID. The exact player ID is still saved privately in the database for connection data.
-
-## Nickname behavior
-
-Users can choose one source only:
-
-- Discord
-- Roblox
-- League
-- VALORANT
-- Mobile Legends
-- Call of Duty
-
-They cannot type a custom nickname through the bot. They can only choose from already connected accounts.
-
-## Recommended next upgrades
-
-If you want this more like RoWifi premium style later, add:
-
-- Web dashboard
-- OAuth verification pages
-- Screenshot proof flow
-- Staff approval queue
-- Better external game APIs where available
-- MongoDB instead of SQLite
-- Button UI and mod logs
+```bash
+python bot.py
+```
