@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     "staff_mention_role_id": None,
     "kick_on_decline": True,
     "panel_message_id": None,
+    "pending_requests": {},
     "embeds": {
         "panel": {
             "title": "Verification Panel",
@@ -105,6 +106,9 @@ def load_config():
 
     if "staff_mention_role_id" not in data:
         data["staff_mention_role_id"] = None
+
+    if "pending_requests" not in data:
+        data["pending_requests"] = {}
 
     if "embeds" not in data:
         data["embeds"] = deep_copy(DEFAULT_CONFIG["embeds"])
@@ -194,6 +198,7 @@ def build_embed(
 
     if image_url:
         embed.set_image(url=image_url)
+
     if thumb_url:
         embed.set_thumbnail(url=thumb_url)
 
@@ -431,6 +436,11 @@ class ApprovalView(discord.ui.View):
         except Exception:
             pass
 
+        user_id_str = str(self.target_user_id)
+        if user_id_str in config.get("pending_requests", {}):
+            del config["pending_requests"][user_id_str]
+            save_config(config)
+
         for child in self.children:
             child.disabled = True
 
@@ -491,6 +501,11 @@ class ApprovalView(discord.ui.View):
             except discord.Forbidden:
                 kicked = False
 
+        user_id_str = str(self.target_user_id)
+        if user_id_str in config.get("pending_requests", {}):
+            del config["pending_requests"][user_id_str]
+            save_config(config)
+
         for child in self.children:
             child.disabled = True
 
@@ -550,6 +565,13 @@ class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
         approval_channel = interaction.guild.get_channel(config["approval_channel_id"])
         if not approval_channel or not isinstance(approval_channel, discord.TextChannel):
             return await interaction.response.send_message("Approval channel is invalid.", ephemeral=True)
+
+        user_id_str = str(interaction.user.id)
+        if user_id_str in config.get("pending_requests", {}):
+            return await interaction.response.send_message(
+                "You already have a pending verification request. Please wait for staff review.",
+                ephemeral=True
+            )
 
         roblox_value = str(self.roblox_input.value).strip()
         notes = str(self.notes_input.value).strip() or "N/A"
@@ -619,6 +641,13 @@ class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
         )
 
         await approval_channel.send(content=notify_staff or None, embed=embed, view=view)
+
+        config["pending_requests"][user_id_str] = {
+            "guild_id": interaction.guild.id,
+            "roblox_username": roblox_value
+        }
+        save_config(config)
+
         await interaction.response.send_message("Your request has been sent to staff for review.", ephemeral=True)
 
 
