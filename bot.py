@@ -138,13 +138,16 @@ def apply_placeholders(
     role_names: Optional[str] = None,
 ):
     text = text or ""
+
     if guild:
         text = text.replace("{guild_name}", guild.name)
+
     if user:
         text = text.replace("{user_mention}", user.mention)
         text = text.replace("{user_name}", user.display_name)
         text = text.replace("{user_tag}", str(user))
         text = text.replace("{user_id}", str(user.id))
+
     text = text.replace("{roblox_username}", roblox_username or "N/A")
     text = text.replace("{notes}", notes or "N/A")
     text = text.replace("{staff_mention}", staff_mention or "Staff")
@@ -184,6 +187,7 @@ def build_embed(
 
     if image_url:
         embed.set_image(url=image_url)
+
     if thumb_url:
         embed.set_thumbnail(url=thumb_url)
 
@@ -206,6 +210,7 @@ async def send_log(guild: discord.Guild, embed: Optional[discord.Embed] = None, 
     channel_id = config.get("logs_channel_id")
     if not channel_id:
         return
+
     channel = guild.get_channel(channel_id)
     if channel and isinstance(channel, discord.TextChannel):
         try:
@@ -298,6 +303,7 @@ class GroupSelect(discord.ui.Select):
                     value=str(group["id"])
                 )
             )
+
         super().__init__(
             placeholder="View Roblox communities",
             min_values=1,
@@ -420,20 +426,19 @@ class ApprovalView(discord.ui.View):
             pass
 
         try:
-            old_embed = interaction.message.embeds[0]
-            new_embed = old_embed.copy()
-            # replace / add status field
-            fields = []
-            for field in old_embed.fields:
-                if field.name.lower() == "status":
-                    continue
-                fields.append(field)
+            if interaction.message.embeds:
+                old_embed = interaction.message.embeds[0].copy()
+                kept_fields = []
+                for field in old_embed.fields:
+                    if field.name.lower() == "status":
+                        continue
+                    kept_fields.append(field)
 
-            new_embed.clear_fields()
-            for field in fields:
-                new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-            new_embed.add_field(name="Status", value=f"Approved by {interaction.user.mention}", inline=False)
-            await interaction.message.edit(embed=new_embed, view=self)
+                old_embed.clear_fields()
+                for field in kept_fields:
+                    old_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                old_embed.add_field(name="Status", value=f"Approved by {interaction.user.mention}", inline=False)
+                await interaction.message.edit(embed=old_embed, view=self)
         except Exception:
             pass
 
@@ -489,19 +494,19 @@ class ApprovalView(discord.ui.View):
                 kicked = False
 
         try:
-            old_embed = interaction.message.embeds[0]
-            new_embed = old_embed.copy()
-            fields = []
-            for field in old_embed.fields:
-                if field.name.lower() == "status":
-                    continue
-                fields.append(field)
+            if interaction.message.embeds:
+                old_embed = interaction.message.embeds[0].copy()
+                kept_fields = []
+                for field in old_embed.fields:
+                    if field.name.lower() == "status":
+                        continue
+                    kept_fields.append(field)
 
-            new_embed.clear_fields()
-            for field in fields:
-                new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
-            new_embed.add_field(name="Status", value=f"Declined by {interaction.user.mention}", inline=False)
-            await interaction.message.edit(embed=new_embed, view=self)
+                old_embed.clear_fields()
+                for field in kept_fields:
+                    old_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                old_embed.add_field(name="Status", value=f"Declined by {interaction.user.mention}", inline=False)
+                await interaction.message.edit(embed=old_embed, view=self)
         except Exception:
             pass
 
@@ -596,11 +601,9 @@ class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
         if notes.upper() != "N/A":
             embed.add_field(name="Notes", value=notes, inline=False)
 
-        # approval thumbnail should be Discord avatar
         if interaction.user.display_avatar:
             embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
-        # preserve custom approval image if there is one and no roblox avatar
         custom_img = config["embeds"]["approval"].get("image_url", "").strip()
         if not roblox_data and custom_img:
             embed.set_image(url=custom_img)
@@ -634,15 +637,18 @@ class SetupState:
         self.verify_channel_id = config.get("verify_channel_id")
         self.approval_channel_id = config.get("approval_channel_id")
         self.logs_channel_id = config.get("logs_channel_id")
-        ids = config.get("approved_role_ids", [])
-        self.approved_role_1 = ids[0] if len(ids) > 0 else None
-        self.approved_role_2 = ids[1] if len(ids) > 1 else None
+        self.approved_role_ids = config.get("approved_role_ids", [])[:2]
         self.kick_on_decline = config.get("kick_on_decline", True)
 
 
 class VerifyChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="Select verify channel", min_values=1, max_values=1, channel_types=[discord.ChannelType.text])
+        super().__init__(
+            placeholder="Select verify channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, SetupView):
@@ -652,7 +658,12 @@ class VerifyChannelSelect(discord.ui.ChannelSelect):
 
 class ApprovalChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="Select approval channel", min_values=1, max_values=1, channel_types=[discord.ChannelType.text])
+        super().__init__(
+            placeholder="Select approval channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, SetupView):
@@ -662,7 +673,12 @@ class ApprovalChannelSelect(discord.ui.ChannelSelect):
 
 class LogsChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
-        super().__init__(placeholder="Select logs channel", min_values=1, max_values=1, channel_types=[discord.ChannelType.text])
+        super().__init__(
+            placeholder="Select logs channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, SetupView):
@@ -670,23 +686,17 @@ class LogsChannelSelect(discord.ui.ChannelSelect):
             await interaction.response.edit_message(embed=self.view.build_summary_embed(), view=self.view)
 
 
-class ApprovedRole1Select(discord.ui.RoleSelect):
+class ApprovedRolesSelect(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="Select approved role #1", min_values=1, max_values=1)
+        super().__init__(
+            placeholder="Select up to 2 approved roles",
+            min_values=1,
+            max_values=2
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, SetupView):
-            self.view.state.approved_role_1 = self.values[0].id
-            await interaction.response.edit_message(embed=self.view.build_summary_embed(), view=self.view)
-
-
-class ApprovedRole2Select(discord.ui.RoleSelect):
-    def __init__(self):
-        super().__init__(placeholder="Select approved role #2 (optional)", min_values=0, max_values=1)
-
-    async def callback(self, interaction: discord.Interaction):
-        if isinstance(self.view, SetupView):
-            self.view.state.approved_role_2 = self.values[0].id if self.values else None
+            self.view.state.approved_role_ids = [role.id for role in self.values[:2]]
             await interaction.response.edit_message(embed=self.view.build_summary_embed(), view=self.view)
 
 
@@ -695,18 +705,22 @@ class SetupView(discord.ui.View):
         super().__init__(timeout=900)
         self.guild = guild
         self.state = SetupState()
+
         self.add_item(VerifyChannelSelect())
         self.add_item(ApprovalChannelSelect())
         self.add_item(LogsChannelSelect())
-        self.add_item(ApprovedRole1Select())
-        self.add_item(ApprovedRole2Select())
+        self.add_item(ApprovedRolesSelect())
 
     def build_summary_embed(self):
         verify_channel = self.guild.get_channel(self.state.verify_channel_id) if self.state.verify_channel_id else None
         approval_channel = self.guild.get_channel(self.state.approval_channel_id) if self.state.approval_channel_id else None
         logs_channel = self.guild.get_channel(self.state.logs_channel_id) if self.state.logs_channel_id else None
-        role1 = self.guild.get_role(self.state.approved_role_1) if self.state.approved_role_1 else None
-        role2 = self.guild.get_role(self.state.approved_role_2) if self.state.approved_role_2 else None
+
+        role_mentions = []
+        for rid in self.state.approved_role_ids:
+            role = self.guild.get_role(rid)
+            if role:
+                role_mentions.append(role.mention)
 
         embed = discord.Embed(
             title="Setup Configuration",
@@ -716,8 +730,7 @@ class SetupView(discord.ui.View):
         embed.add_field(name="Verify Channel", value=verify_channel.mention if verify_channel else "Not set", inline=False)
         embed.add_field(name="Approval Channel", value=approval_channel.mention if approval_channel else "Not set", inline=False)
         embed.add_field(name="Logs Channel", value=logs_channel.mention if logs_channel else "Not set", inline=False)
-        embed.add_field(name="Approved Role #1", value=role1.mention if role1 else "Not set", inline=False)
-        embed.add_field(name="Approved Role #2", value=role2.mention if role2 else "Not set", inline=False)
+        embed.add_field(name="Approved Roles", value=", ".join(role_mentions) if role_mentions else "Not set", inline=False)
         embed.add_field(name="Kick on Decline", value=str(self.state.kick_on_decline), inline=False)
         return embed
 
@@ -734,17 +747,13 @@ class SetupView(discord.ui.View):
             return await interaction.response.send_message("Please select an approval channel.", ephemeral=True)
         if not self.state.logs_channel_id:
             return await interaction.response.send_message("Please select a logs channel.", ephemeral=True)
-        if not self.state.approved_role_1:
-            return await interaction.response.send_message("Please select approved role #1.", ephemeral=True)
-
-        role_ids = [self.state.approved_role_1]
-        if self.state.approved_role_2 and self.state.approved_role_2 != self.state.approved_role_1:
-            role_ids.append(self.state.approved_role_2)
+        if not self.state.approved_role_ids:
+            return await interaction.response.send_message("Please select at least 1 approved role.", ephemeral=True)
 
         config["verify_channel_id"] = self.state.verify_channel_id
         config["approval_channel_id"] = self.state.approval_channel_id
         config["logs_channel_id"] = self.state.logs_channel_id
-        config["approved_role_ids"] = role_ids[:2]
+        config["approved_role_ids"] = self.state.approved_role_ids[:2]
         config["kick_on_decline"] = self.state.kick_on_decline
         save_config(config)
 
@@ -757,18 +766,38 @@ class SetupView(discord.ui.View):
         await interaction.response.edit_message(content="Setup panel closed.", embed=self.build_summary_embed(), view=self)
 
 
-# -------- EDITOR (fixed, no nested modal) --------
-
 class EditTextModal(discord.ui.Modal):
     def __init__(self, kind: str):
         super().__init__(title=f"Edit {kind} Text", timeout=300)
         self.kind = kind
         current = config["embeds"][kind]
 
-        self.title_input = discord.ui.TextInput(label="Title", default=current.get("title", "")[:100], max_length=100, required=True)
-        self.desc_input = discord.ui.TextInput(label="Description", default=current.get("description", "")[:4000], style=discord.TextStyle.paragraph, max_length=4000, required=True)
-        self.color_input = discord.ui.TextInput(label="Color Hex", default=current.get("color", "5865F2")[:20], placeholder="5865F2", max_length=20, required=False)
-        self.footer_input = discord.ui.TextInput(label="Footer", default=current.get("footer", "")[:200], max_length=200, required=False)
+        self.title_input = discord.ui.TextInput(
+            label="Title",
+            default=current.get("title", "")[:100],
+            max_length=100,
+            required=True
+        )
+        self.desc_input = discord.ui.TextInput(
+            label="Description",
+            default=current.get("description", "")[:4000],
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+            required=True
+        )
+        self.color_input = discord.ui.TextInput(
+            label="Color Hex",
+            default=current.get("color", "5865F2")[:20],
+            placeholder="5865F2",
+            max_length=20,
+            required=False
+        )
+        self.footer_input = discord.ui.TextInput(
+            label="Footer",
+            default=current.get("footer", "")[:200],
+            max_length=200,
+            required=False
+        )
 
         self.add_item(self.title_input)
         self.add_item(self.desc_input)
@@ -792,7 +821,11 @@ class EditTextModal(discord.ui.Modal):
             staff_mention=interaction.user.mention if interaction.user else "Staff",
             role_names="Role 1, Role 2"
         )
-        await interaction.response.send_message(f"Updated **{self.kind}** text settings.", embed=preview, ephemeral=True)
+        await interaction.response.send_message(
+            f"Updated **{self.kind}** text settings.",
+            embed=preview,
+            ephemeral=True
+        )
 
 
 class EditMediaModal(discord.ui.Modal):
@@ -815,6 +848,7 @@ class EditMediaModal(discord.ui.Modal):
             max_length=400,
             required=False
         )
+
         self.add_item(self.image_input)
         self.add_item(self.thumb_input)
 
@@ -833,7 +867,11 @@ class EditMediaModal(discord.ui.Modal):
             staff_mention=interaction.user.mention if interaction.user else "Staff",
             role_names="Role 1, Role 2"
         )
-        await interaction.response.send_message(f"Updated **{self.kind}** media settings.", embed=preview, ephemeral=True)
+        await interaction.response.send_message(
+            f"Updated **{self.kind}** media settings.",
+            embed=preview,
+            ephemeral=True
+        )
 
 
 class EditEmbedTargetSelect(discord.ui.Select):
@@ -844,7 +882,12 @@ class EditEmbedTargetSelect(discord.ui.Select):
             discord.SelectOption(label="Approved DM Embed", value="approved_dm"),
             discord.SelectOption(label="Declined DM Embed", value="declined_dm"),
         ]
-        super().__init__(placeholder="Choose embed", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="Choose embed",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, EditHomeView):
