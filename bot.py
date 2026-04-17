@@ -194,7 +194,6 @@ def build_embed(
 
     if image_url:
         embed.set_image(url=image_url)
-
     if thumb_url:
         embed.set_thumbnail(url=thumb_url)
 
@@ -438,12 +437,7 @@ class ApprovalView(discord.ui.View):
         try:
             if interaction.message.embeds:
                 old_embed = interaction.message.embeds[0].copy()
-                kept_fields = []
-                for field in old_embed.fields:
-                    if field.name.lower() == "status":
-                        continue
-                    kept_fields.append(field)
-
+                kept_fields = [field for field in old_embed.fields if field.name.lower() != "status"]
                 old_embed.clear_fields()
                 for field in kept_fields:
                     old_embed.add_field(name=field.name, value=field.value, inline=field.inline)
@@ -503,12 +497,7 @@ class ApprovalView(discord.ui.View):
         try:
             if interaction.message.embeds:
                 old_embed = interaction.message.embeds[0].copy()
-                kept_fields = []
-                for field in old_embed.fields:
-                    if field.name.lower() == "status":
-                        continue
-                    kept_fields.append(field)
-
+                kept_fields = [field for field in old_embed.fields if field.name.lower() != "status"]
                 old_embed.clear_fields()
                 for field in kept_fields:
                     old_embed.add_field(name=field.name, value=field.value, inline=field.inline)
@@ -722,9 +711,41 @@ class StaffMentionRoleSelect(discord.ui.RoleSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if isinstance(self.view, SetupView):
-            self.view.state.staff_mention_role_id = self.values[0].id if self.values else None
-            await interaction.response.edit_message(embed=self.view.build_summary_embed(), view=self.view)
+        if isinstance(self.view, StaffRoleSetupView):
+            self.view.selected_role_id = self.values[0].id if self.values else None
+            guild = interaction.guild
+            role = guild.get_role(self.view.selected_role_id) if guild and self.view.selected_role_id else None
+            embed = discord.Embed(
+                title="Staff Notify Role",
+                description=f"Selected: {role.mention if role else 'Not set'}",
+                color=discord.Color.blurple()
+            )
+            await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+class StaffRoleSetupView(discord.ui.View):
+    def __init__(self, parent_view):
+        super().__init__(timeout=300)
+        self.parent_view = parent_view
+        self.selected_role_id = parent_view.state.staff_mention_role_id
+        self.add_item(StaffMentionRoleSelect())
+
+    @discord.ui.button(label="Save Staff Role", style=discord.ButtonStyle.success, row=4)
+    async def save_staff_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.parent_view.state.staff_mention_role_id = self.selected_role_id
+        await interaction.response.edit_message(
+            content="Staff notify role saved.",
+            embed=self.parent_view.build_summary_embed(),
+            view=self.parent_view
+        )
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=4)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="Back to setup.",
+            embed=self.parent_view.build_summary_embed(),
+            view=self.parent_view
+        )
 
 
 class SetupView(discord.ui.View):
@@ -737,7 +758,6 @@ class SetupView(discord.ui.View):
         self.add_item(ApprovalChannelSelect())
         self.add_item(LogsChannelSelect())
         self.add_item(ApprovedRolesSelect())
-        self.add_item(StaffMentionRoleSelect())
 
     def build_summary_embed(self):
         verify_channel = self.guild.get_channel(self.state.verify_channel_id) if self.state.verify_channel_id else None
@@ -763,6 +783,21 @@ class SetupView(discord.ui.View):
         embed.add_field(name="Staff Notify Role", value=notify_role.mention if notify_role else "Not set", inline=False)
         embed.add_field(name="Kick on Decline", value=str(self.state.kick_on_decline), inline=False)
         return embed
+
+    @discord.ui.button(label="Set Staff Notify Role", style=discord.ButtonStyle.primary, row=4)
+    async def set_staff_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = StaffRoleSetupView(self)
+        role = interaction.guild.get_role(self.state.staff_mention_role_id) if self.state.staff_mention_role_id else None
+        embed = discord.Embed(
+            title="Staff Notify Role",
+            description=f"Selected: {role.mention if role else 'Not set'}",
+            color=discord.Color.blurple()
+        )
+        await interaction.response.edit_message(
+            content="Choose a staff notify role.",
+            embed=embed,
+            view=view
+        )
 
     @discord.ui.button(label="Toggle Kick On Decline", style=discord.ButtonStyle.secondary, row=4)
     async def toggle_kick(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -803,32 +838,10 @@ class EditTextModal(discord.ui.Modal):
         self.kind = kind
         current = config["embeds"][kind]
 
-        self.title_input = discord.ui.TextInput(
-            label="Title",
-            default=current.get("title", "")[:100],
-            max_length=100,
-            required=True
-        )
-        self.desc_input = discord.ui.TextInput(
-            label="Description",
-            default=current.get("description", "")[:4000],
-            style=discord.TextStyle.paragraph,
-            max_length=4000,
-            required=True
-        )
-        self.color_input = discord.ui.TextInput(
-            label="Color Hex",
-            default=current.get("color", "5865F2")[:20],
-            placeholder="5865F2",
-            max_length=20,
-            required=False
-        )
-        self.footer_input = discord.ui.TextInput(
-            label="Footer",
-            default=current.get("footer", "")[:200],
-            max_length=200,
-            required=False
-        )
+        self.title_input = discord.ui.TextInput(label="Title", default=current.get("title", "")[:100], max_length=100, required=True)
+        self.desc_input = discord.ui.TextInput(label="Description", default=current.get("description", "")[:4000], style=discord.TextStyle.paragraph, max_length=4000, required=True)
+        self.color_input = discord.ui.TextInput(label="Color Hex", default=current.get("color", "5865F2")[:20], placeholder="5865F2", max_length=20, required=False)
+        self.footer_input = discord.ui.TextInput(label="Footer", default=current.get("footer", "")[:200], max_length=200, required=False)
 
         self.add_item(self.title_input)
         self.add_item(self.desc_input)
@@ -853,11 +866,7 @@ class EditTextModal(discord.ui.Modal):
             role_names="Role 1, Role 2",
             notify_staff="@Staff"
         )
-        await interaction.response.send_message(
-            f"Updated **{self.kind}** text settings.",
-            embed=preview,
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"Updated **{self.kind}** text settings.", embed=preview, ephemeral=True)
 
 
 class EditMediaModal(discord.ui.Modal):
@@ -900,11 +909,7 @@ class EditMediaModal(discord.ui.Modal):
             role_names="Role 1, Role 2",
             notify_staff="@Staff"
         )
-        await interaction.response.send_message(
-            f"Updated **{self.kind}** media settings.",
-            embed=preview,
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"Updated **{self.kind}** media settings.", embed=preview, ephemeral=True)
 
 
 class EditEmbedTargetSelect(discord.ui.Select):
@@ -915,20 +920,12 @@ class EditEmbedTargetSelect(discord.ui.Select):
             discord.SelectOption(label="Approved DM Embed", value="approved_dm"),
             discord.SelectOption(label="Declined DM Embed", value="declined_dm"),
         ]
-        super().__init__(
-            placeholder="Choose embed",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
+        super().__init__(placeholder="Choose embed", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if isinstance(self.view, EditHomeView):
             self.view.current_kind = self.values[0]
-            await interaction.response.edit_message(
-                content=f"Selected: **{self.values[0]}**",
-                view=self.view
-            )
+            await interaction.response.edit_message(content=f"Selected: **{self.values[0]}**", view=self.view)
 
 
 class EditHomeView(discord.ui.View):
