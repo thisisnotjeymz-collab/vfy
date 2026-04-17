@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 import aiohttp
 import discord
@@ -26,6 +26,7 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 DEFAULT_CONFIG = {
     "approval_channel_id": None,
@@ -101,13 +102,13 @@ def load_config():
     if "embeds" not in data:
         data["embeds"] = deep_copy(DEFAULT_CONFIG["embeds"])
 
-    for embed_name, embed_defaults in DEFAULT_CONFIG["embeds"].items():
+    for embed_name, defaults in DEFAULT_CONFIG["embeds"].items():
         if embed_name not in data["embeds"]:
-            data["embeds"][embed_name] = deep_copy(embed_defaults)
+            data["embeds"][embed_name] = deep_copy(defaults)
         else:
-            for k, v in embed_defaults.items():
-                if k not in data["embeds"][embed_name]:
-                    data["embeds"][embed_name][k] = v
+            for key, value in defaults.items():
+                if key not in data["embeds"][embed_name]:
+                    data["embeds"][embed_name][key] = value
 
     return data
 
@@ -133,21 +134,17 @@ def apply_placeholders(
     role_name: Optional[str] = None,
 ):
     text = text or ""
-
     if guild:
         text = text.replace("{guild_name}", guild.name)
-
     if user:
         text = text.replace("{user_mention}", user.mention)
         text = text.replace("{user_name}", user.display_name)
         text = text.replace("{user_tag}", str(user))
         text = text.replace("{user_id}", str(user.id))
-
     text = text.replace("{roblox_username}", roblox_username or "N/A")
     text = text.replace("{notes}", notes or "N/A")
     text = text.replace("{staff_mention}", staff_mention or "Staff")
     text = text.replace("{role_name}", role_name or "Verified")
-
     return text
 
 
@@ -183,7 +180,6 @@ def build_embed(
 
     if image_url:
         embed.set_image(url=image_url)
-
     if thumb_url:
         embed.set_thumbnail(url=thumb_url)
 
@@ -215,7 +211,7 @@ async def send_log(guild: discord.Guild, embed: Optional[discord.Embed] = None, 
             pass
 
 
-async def roblox_lookup(username: str):
+async def roblox_lookup(username: str) -> Optional[Dict[str, Any]]:
     username = (username or "").strip()
     if not username or username.upper() == "N/A":
         return None
@@ -224,10 +220,7 @@ async def roblox_lookup(username: str):
         try:
             async with session.post(
                 "https://users.roblox.com/v1/usernames/users",
-                json={
-                    "usernames": [username],
-                    "excludeBannedUsers": False
-                }
+                json={"usernames": [username], "excludeBannedUsers": False}
             ) as resp:
                 if resp.status != 200:
                     return None
@@ -255,15 +248,252 @@ async def roblox_lookup(username: str):
                     if thumb_items:
                         avatar_url = thumb_items[0].get("imageUrl", "")
 
+            groups: List[Dict[str, Any]] = []
+            try:
+                async with session.get(
+                    f"https://groups.roblox.com/v2/users/{user_id}/groups/roles"
+                ) as resp:
+                    if resp.status == 200:
+                        groups_data = await resp.json()
+                        raw_groups = groups_data.get("data", [])
+                        for item in raw_groups[:25]:
+                            group = item.get("group", {})
+                            role = item.get("role", {})
+                            gid = group.get("id")
+                            gname = group.get("name", "Unknown Group")
+                            role_name = role.get("name", "Member")
+                            if gid:
+                                groups.append(
+                                    {
+                                        "id": gid,
+                                        "name": gname,
+                                        "role_name": role_name,
+                                        "url": f"https://www.roblox.com/communities/{gid}/group"
+                                    }
+                                )
+            except Exception:
+                groups = []
+
             return {
                 "user_id": user_id,
                 "username": real_username,
                 "display_name": display_name,
                 "profile_url": f"https://www.roblox.com/users/{user_id}/profile",
-                "avatar_url": avatar_url
+                "avatar_url": avatar_url,
+                "groups": groups
             }
         except Exception:
             return None
+
+
+class GroupSelect(discord.ui.Select):
+    def __init__(self, groups: List[Dict[str, Any]]):
+        options = []
+        for group in groups[:25]:
+            label = group["name"][:100]
+            description = f"Role: {group['role_name']}"[:100]
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    description=description,
+                    value=str(group["id"])
+                )
+            )
+
+        super().__init__(
+            placeholder="View Roblox communities",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=1
+        )
+        self.groups = {str(g["id"]): g for g in groups[:25]}
+
+    async def callback(self, interaction: discord.Interaction):
+        group = self.groups.get(self.values[0])
+        if not group:
+            return await interaction.response.send_message("Group not found.", ephemeral=True)
+
+        embed = discord.Embed(
+            title=group["name"],
+            description=f"**Role:** {group['role_name']}\n**Link:** {group['url']}",
+            color=discord.Color.blurple()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ApprovalView(discord.ui.View):
+    def __init__(
+        self,
+        target_user_id: int,
+        roblox_username: str = "N/A",
+        notes: str = "N/A",
+        roblox_profile_url: Optional[str] = None,
+        discord_avatar_url: Optional[str] = None,
+        roblox_groups: Optional[List[Dict[str, Any]]] = None
+    ):
+        super().__init__(timeout=604800)
+        self.target_user_id = target_user_id
+        self.roblox_username = roblox_username
+        self.notes = notes
+        self.roblox_profile_url = roblox_profile_url
+        self.discord_avatar_url = discord_avatar_url
+        self.roblox_groups = roblox_groups or []
+
+        if self.roblox_profile_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Roblox Profile",
+                    style=discord.ButtonStyle.link,
+                    url=self.roblox_profile_url,
+                    row=0
+                )
+            )
+
+        if self.discord_avatar_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Discord Avatar",
+                    style=discord.ButtonStyle.link,
+                    url=self.discord_avatar_url,
+                    row=0
+                )
+            )
+
+        if self.roblox_groups:
+            self.add_item(GroupSelect(self.roblox_groups))
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success, custom_id="verify_approve", row=2)
+    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild:
+            return await interaction.response.send_message("Guild only.", ephemeral=True)
+
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("You need Manage Roles.", ephemeral=True)
+
+        role_id = config.get("approved_role_id")
+        if not role_id:
+            return await interaction.response.send_message("Approved role is not set.", ephemeral=True)
+
+        member = interaction.guild.get_member(self.target_user_id)
+        role = interaction.guild.get_role(role_id)
+
+        if not member:
+            return await interaction.response.send_message("User not found.", ephemeral=True)
+        if not role:
+            return await interaction.response.send_message("Role not found.", ephemeral=True)
+
+        me = interaction.guild.me
+        if me is None or me.top_role <= role:
+            return await interaction.response.send_message(
+                "My bot role must be higher than the approved role.",
+                ephemeral=True
+            )
+
+        try:
+            await member.add_roles(role, reason=f"Approved by {interaction.user}")
+        except discord.Forbidden:
+            return await interaction.response.send_message(
+                "I can't assign that role. Check permissions and role order.",
+                ephemeral=True
+            )
+
+        dm_embed = build_embed(
+            "approved_dm",
+            guild=interaction.guild,
+            user=member,
+            roblox_username=self.roblox_username,
+            notes=self.notes,
+            staff_mention=interaction.user.mention,
+            role_name=role.name
+        )
+
+        try:
+            await member.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        log_embed = discord.Embed(
+            title="Approved",
+            description=f"{member.mention} was approved by {interaction.user.mention}.",
+            color=discord.Color.green()
+        )
+
+        if self.roblox_profile_url:
+            log_embed.add_field(name="Roblox Profile", value=self.roblox_profile_url, inline=False)
+
+        await send_log(interaction.guild, embed=log_embed)
+
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.style != discord.ButtonStyle.link:
+                child.disabled = True
+            if isinstance(child, discord.ui.Select):
+                child.disabled = True
+
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        await interaction.response.send_message(f"Approved {member.mention}.", ephemeral=True)
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="verify_decline", row=2)
+    async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild:
+            return await interaction.response.send_message("Guild only.", ephemeral=True)
+
+        if not interaction.user.guild_permissions.kick_members:
+            return await interaction.response.send_message("You need Kick Members.", ephemeral=True)
+
+        member = interaction.guild.get_member(self.target_user_id)
+        if not member:
+            return await interaction.response.send_message("User not found.", ephemeral=True)
+
+        dm_embed = build_embed(
+            "declined_dm",
+            guild=interaction.guild,
+            user=member,
+            roblox_username=self.roblox_username,
+            notes=self.notes,
+            staff_mention=interaction.user.mention
+        )
+
+        try:
+            await member.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        kicked = False
+        if config.get("kick_on_decline", True):
+            try:
+                await member.kick(reason=f"Declined by {interaction.user}")
+                kicked = True
+            except discord.Forbidden:
+                kicked = False
+
+        log_embed = discord.Embed(
+            title="Declined",
+            description=f"{member.mention} was declined by {interaction.user.mention}.\nKick executed: **{kicked}**",
+            color=discord.Color.red()
+        )
+
+        if self.roblox_profile_url:
+            log_embed.add_field(name="Roblox Profile", value=self.roblox_profile_url, inline=False)
+
+        await send_log(interaction.guild, embed=log_embed)
+
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.style != discord.ButtonStyle.link:
+                child.disabled = True
+            if isinstance(child, discord.ui.Select):
+                child.disabled = True
+
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        await interaction.response.send_message(f"Declined {member.mention}. Kick: {kicked}", ephemeral=True)
 
 
 class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
@@ -333,7 +563,11 @@ class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
             )
             if roblox_data["avatar_url"]:
                 embed.set_thumbnail(url=roblox_data["avatar_url"])
+            elif interaction.user.display_avatar:
+                embed.set_thumbnail(url=interaction.user.display_avatar.url)
         else:
+            if interaction.user.display_avatar:
+                embed.set_thumbnail(url=interaction.user.display_avatar.url)
             if roblox_value.upper() != "N/A":
                 embed.add_field(name="Roblox Account", value=roblox_value, inline=False)
 
@@ -344,159 +578,17 @@ class VerificationRequestModal(discord.ui.Modal, title="Verification Request"):
         if roblox_data:
             content = f"Roblox profile to review: {roblox_data['profile_url']}"
 
-        await approval_channel.send(
-            content=content,
-            embed=embed,
-            view=ApprovalView(
-                interaction.user.id,
-                roblox_value,
-                notes,
-                roblox_data["profile_url"] if roblox_data else None
-            )
+        view = ApprovalView(
+            target_user_id=interaction.user.id,
+            roblox_username=roblox_value,
+            notes=notes,
+            roblox_profile_url=roblox_data["profile_url"] if roblox_data else None,
+            discord_avatar_url=interaction.user.display_avatar.url if interaction.user.display_avatar else None,
+            roblox_groups=roblox_data.get("groups", []) if roblox_data else []
         )
 
+        await approval_channel.send(content=content, embed=embed, view=view)
         await interaction.response.send_message("Your request has been sent to staff for review.", ephemeral=True)
-
-
-class ApprovalView(discord.ui.View):
-    def __init__(
-        self,
-        target_user_id: int,
-        roblox_username: str = "N/A",
-        notes: str = "N/A",
-        roblox_profile_url: Optional[str] = None
-    ):
-        super().__init__(timeout=None)
-        self.target_user_id = target_user_id
-        self.roblox_username = roblox_username
-        self.notes = notes
-        self.roblox_profile_url = roblox_profile_url
-
-    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success, custom_id="verify_approve")
-    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.guild:
-            return await interaction.response.send_message("Guild only.", ephemeral=True)
-
-        if not interaction.user.guild_permissions.manage_roles:
-            return await interaction.response.send_message("You need Manage Roles.", ephemeral=True)
-
-        role_id = config.get("approved_role_id")
-        if not role_id:
-            return await interaction.response.send_message("Approved role is not set.", ephemeral=True)
-
-        member = interaction.guild.get_member(self.target_user_id)
-        role = interaction.guild.get_role(role_id)
-
-        if not member:
-            return await interaction.response.send_message("User not found.", ephemeral=True)
-        if not role:
-            return await interaction.response.send_message("Role not found.", ephemeral=True)
-
-        me = interaction.guild.me
-        if me is None or me.top_role <= role:
-            return await interaction.response.send_message(
-                "My bot role must be higher than the approved role.",
-                ephemeral=True
-            )
-
-        try:
-            await member.add_roles(role, reason=f"Approved by {interaction.user}")
-        except discord.Forbidden:
-            return await interaction.response.send_message(
-                "I can't assign that role. Check permissions and role order.",
-                ephemeral=True
-            )
-
-        dm_embed = build_embed(
-            "approved_dm",
-            guild=interaction.guild,
-            user=member,
-            roblox_username=self.roblox_username,
-            notes=self.notes,
-            staff_mention=interaction.user.mention,
-            role_name=role.name
-        )
-
-        try:
-            await member.send(embed=dm_embed)
-        except Exception:
-            pass
-
-        log_embed = discord.Embed(
-            title="Approved",
-            description=f"{member.mention} was approved by {interaction.user.mention}.",
-            color=discord.Color.green()
-        )
-
-        if self.roblox_profile_url:
-            log_embed.add_field(name="Roblox Profile", value=self.roblox_profile_url, inline=False)
-
-        await send_log(interaction.guild, embed=log_embed)
-
-        for child in self.children:
-            child.disabled = True
-
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-
-        await interaction.response.send_message(f"Approved {member.mention}.", ephemeral=True)
-
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="verify_decline")
-    async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.guild:
-            return await interaction.response.send_message("Guild only.", ephemeral=True)
-
-        if not interaction.user.guild_permissions.kick_members:
-            return await interaction.response.send_message("You need Kick Members.", ephemeral=True)
-
-        member = interaction.guild.get_member(self.target_user_id)
-        if not member:
-            return await interaction.response.send_message("User not found.", ephemeral=True)
-
-        dm_embed = build_embed(
-            "declined_dm",
-            guild=interaction.guild,
-            user=member,
-            roblox_username=self.roblox_username,
-            notes=self.notes,
-            staff_mention=interaction.user.mention
-        )
-
-        try:
-            await member.send(embed=dm_embed)
-        except Exception:
-            pass
-
-        kicked = False
-        if config.get("kick_on_decline", True):
-            try:
-                await member.kick(reason=f"Declined by {interaction.user}")
-                kicked = True
-            except discord.Forbidden:
-                kicked = False
-
-        log_embed = discord.Embed(
-            title="Declined",
-            description=f"{member.mention} was declined by {interaction.user.mention}.\nKick executed: **{kicked}**",
-            color=discord.Color.red()
-        )
-
-        if self.roblox_profile_url:
-            log_embed.add_field(name="Roblox Profile", value=self.roblox_profile_url, inline=False)
-
-        await send_log(interaction.guild, embed=log_embed)
-
-        for child in self.children:
-            child.disabled = True
-
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-
-        await interaction.response.send_message(f"Declined {member.mention}. Kick: {kicked}", ephemeral=True)
 
 
 class GetRolesView(discord.ui.View):
@@ -510,96 +602,136 @@ class GetRolesView(discord.ui.View):
         await interaction.response.send_modal(VerificationRequestModal())
 
 
-class SetupModal(discord.ui.Modal, title="Setup Configuration"):
+class SetupState:
+    def __init__(self):
+        self.verify_channel_id = config.get("verify_channel_id")
+        self.approval_channel_id = config.get("approval_channel_id")
+        self.logs_channel_id = config.get("logs_channel_id")
+        self.approved_role_id = config.get("approved_role_id")
+        self.kick_on_decline = config.get("kick_on_decline", True)
+
+
+class VerifyChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="Select verify channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if isinstance(view, SetupView):
+            channel = self.values[0]
+            view.state.verify_channel_id = channel.id
+            await interaction.response.edit_message(embed=view.build_summary_embed(), view=view)
+
+
+class ApprovalChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="Select approval channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if isinstance(view, SetupView):
+            channel = self.values[0]
+            view.state.approval_channel_id = channel.id
+            await interaction.response.edit_message(embed=view.build_summary_embed(), view=view)
+
+
+class LogsChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="Select logs channel",
+            min_values=1,
+            max_values=1,
+            channel_types=[discord.ChannelType.text]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if isinstance(view, SetupView):
+            channel = self.values[0]
+            view.state.logs_channel_id = channel.id
+            await interaction.response.edit_message(embed=view.build_summary_embed(), view=view)
+
+
+class ApprovedRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="Select approved role", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if isinstance(view, SetupView):
+            role = self.values[0]
+            view.state.approved_role_id = role.id
+            await interaction.response.edit_message(embed=view.build_summary_embed(), view=view)
+
+
+class SetupView(discord.ui.View):
     def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=300)
+        super().__init__(timeout=900)
         self.guild = guild
+        self.state = SetupState()
+        self.add_item(VerifyChannelSelect())
+        self.add_item(ApprovalChannelSelect())
+        self.add_item(LogsChannelSelect())
+        self.add_item(ApprovedRoleSelect())
 
-        self.verify_channel_input = discord.ui.TextInput(
-            label="Verify Channel ID",
-            default=str(config["verify_channel_id"]) if config.get("verify_channel_id") else "",
-            placeholder="Paste channel ID",
-            required=True,
-            max_length=30
-        )
-        self.approval_channel_input = discord.ui.TextInput(
-            label="Approval Channel ID",
-            default=str(config["approval_channel_id"]) if config.get("approval_channel_id") else "",
-            placeholder="Paste channel ID",
-            required=True,
-            max_length=30
-        )
-        self.logs_channel_input = discord.ui.TextInput(
-            label="Logs Channel ID",
-            default=str(config["logs_channel_id"]) if config.get("logs_channel_id") else "",
-            placeholder="Paste channel ID",
-            required=True,
-            max_length=30
-        )
-        self.role_input = discord.ui.TextInput(
-            label="Approved Role ID",
-            default=str(config["approved_role_id"]) if config.get("approved_role_id") else "",
-            placeholder="Paste role ID",
-            required=True,
-            max_length=30
-        )
-        self.kick_input = discord.ui.TextInput(
-            label="Kick on Decline (true/false)",
-            default=str(config.get("kick_on_decline", True)).lower(),
-            placeholder="true or false",
-            required=True,
-            max_length=10
-        )
-
-        self.add_item(self.verify_channel_input)
-        self.add_item(self.approval_channel_input)
-        self.add_item(self.logs_channel_input)
-        self.add_item(self.role_input)
-        self.add_item(self.kick_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            verify_channel_id = int(str(self.verify_channel_input.value).strip())
-            approval_channel_id = int(str(self.approval_channel_input.value).strip())
-            logs_channel_id = int(str(self.logs_channel_input.value).strip())
-            role_id = int(str(self.role_input.value).strip())
-            kick_on_decline = str(self.kick_input.value).strip().lower() in ("true", "yes", "1", "on")
-        except ValueError:
-            return await interaction.response.send_message("Invalid ID input.", ephemeral=True)
-
-        verify_channel = self.guild.get_channel(verify_channel_id)
-        approval_channel = self.guild.get_channel(approval_channel_id)
-        logs_channel = self.guild.get_channel(logs_channel_id)
-        role = self.guild.get_role(role_id)
-
-        if not verify_channel or not isinstance(verify_channel, discord.TextChannel):
-            return await interaction.response.send_message("Verify channel ID is invalid.", ephemeral=True)
-        if not approval_channel or not isinstance(approval_channel, discord.TextChannel):
-            return await interaction.response.send_message("Approval channel ID is invalid.", ephemeral=True)
-        if not logs_channel or not isinstance(logs_channel, discord.TextChannel):
-            return await interaction.response.send_message("Logs channel ID is invalid.", ephemeral=True)
-        if not role:
-            return await interaction.response.send_message("Approved role ID is invalid.", ephemeral=True)
-
-        config["verify_channel_id"] = verify_channel_id
-        config["approval_channel_id"] = approval_channel_id
-        config["logs_channel_id"] = logs_channel_id
-        config["approved_role_id"] = role_id
-        config["kick_on_decline"] = kick_on_decline
-        save_config(config)
+    def build_summary_embed(self) -> discord.Embed:
+        verify_channel = self.guild.get_channel(self.state.verify_channel_id) if self.state.verify_channel_id else None
+        approval_channel = self.guild.get_channel(self.state.approval_channel_id) if self.state.approval_channel_id else None
+        logs_channel = self.guild.get_channel(self.state.logs_channel_id) if self.state.logs_channel_id else None
+        approved_role = self.guild.get_role(self.state.approved_role_id) if self.state.approved_role_id else None
 
         embed = discord.Embed(
-            title="Setup Saved",
-            description=(
-                f"**Verify Channel:** {verify_channel.mention}\n"
-                f"**Approval Channel:** {approval_channel.mention}\n"
-                f"**Logs Channel:** {logs_channel.mention}\n"
-                f"**Approved Role:** {role.mention}\n"
-                f"**Kick on Decline:** `{kick_on_decline}`"
-            ),
-            color=discord.Color.green()
+            title="Setup Configuration",
+            description="Choose the channels and role below, then save.",
+            color=discord.Color.blurple()
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.add_field(name="Verify Channel", value=verify_channel.mention if verify_channel else "Not set", inline=False)
+        embed.add_field(name="Approval Channel", value=approval_channel.mention if approval_channel else "Not set", inline=False)
+        embed.add_field(name="Logs Channel", value=logs_channel.mention if logs_channel else "Not set", inline=False)
+        embed.add_field(name="Approved Role", value=approved_role.mention if approved_role else "Not set", inline=False)
+        embed.add_field(name="Kick on Decline", value=str(self.state.kick_on_decline), inline=False)
+        return embed
+
+    @discord.ui.button(label="Toggle Kick On Decline", style=discord.ButtonStyle.secondary, row=4)
+    async def toggle_kick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.state.kick_on_decline = not self.state.kick_on_decline
+        await interaction.response.edit_message(embed=self.build_summary_embed(), view=self)
+
+    @discord.ui.button(label="Save Setup", style=discord.ButtonStyle.success, row=4)
+    async def save_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.state.verify_channel_id:
+            return await interaction.response.send_message("Please select a verify channel.", ephemeral=True)
+        if not self.state.approval_channel_id:
+            return await interaction.response.send_message("Please select an approval channel.", ephemeral=True)
+        if not self.state.logs_channel_id:
+            return await interaction.response.send_message("Please select a logs channel.", ephemeral=True)
+        if not self.state.approved_role_id:
+            return await interaction.response.send_message("Please select an approved role.", ephemeral=True)
+
+        config["verify_channel_id"] = self.state.verify_channel_id
+        config["approval_channel_id"] = self.state.approval_channel_id
+        config["logs_channel_id"] = self.state.logs_channel_id
+        config["approved_role_id"] = self.state.approved_role_id
+        config["kick_on_decline"] = self.state.kick_on_decline
+        save_config(config)
+
+        await interaction.response.edit_message(content="Setup saved.", embed=self.build_summary_embed(), view=self)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, row=4)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Setup panel closed.", embed=self.build_summary_embed(), view=self)
 
 
 class EditEmbedMainModal(discord.ui.Modal):
@@ -664,7 +796,6 @@ class EditEmbedThumbnailModal(discord.ui.Modal):
         super().__init__(title=f"{kind} Thumbnail", timeout=300)
         self.kind = kind
         self.saved_data = saved_data
-
         self.thumb_input = discord.ui.TextInput(
             label="Thumbnail URL",
             default=config["embeds"][kind].get("thumbnail_url", "")[:400],
@@ -688,15 +819,12 @@ class EditEmbedThumbnailModal(discord.ui.Modal):
             self.kind,
             guild=interaction.guild,
             user=interaction.user if isinstance(interaction.user, discord.Member) else None,
-            roblox_username="N/A",
-            notes="N/A"
+            roblox_username="ExampleUser",
+            notes="Example note",
+            staff_mention=interaction.user.mention if interaction.user else "Staff",
+            role_name="Verified"
         )
-
-        await interaction.response.send_message(
-            f"Updated **{self.kind}** embed.",
-            embed=preview,
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"Updated **{self.kind}** embed.", embed=preview, ephemeral=True)
 
 
 class EditSelect(discord.ui.Select):
@@ -707,12 +835,7 @@ class EditSelect(discord.ui.Select):
             discord.SelectOption(label="Approved DM Embed", value="approved_dm"),
             discord.SelectOption(label="Declined DM Embed", value="declined_dm"),
         ]
-        super().__init__(
-            placeholder="Choose what to edit",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
+        super().__init__(placeholder="Choose what to edit", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(EditEmbedMainModal(self.values[0]))
@@ -781,7 +904,13 @@ async def setup_command(interaction: discord.Interaction):
     if not interaction.guild:
         return await interaction.response.send_message("Guild only.", ephemeral=True)
 
-    await interaction.response.send_modal(SetupModal(interaction.guild))
+    view = SetupView(interaction.guild)
+    await interaction.response.send_message(
+        content="Pick your channels and role below.",
+        embed=view.build_summary_embed(),
+        view=view,
+        ephemeral=True
+    )
 
 
 @bot.tree.command(name="edit", description="Edit embeds and refresh panel.")
